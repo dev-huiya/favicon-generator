@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Favicon Generator</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/styles/default.min.css">
+    <style>
+        #drop-area {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 10px;
+        }
+        #preview {
+            margin-top: 10px;
+            text-align: center;
+        }
+        #preview img {
+            max-width: 100px;
+            max-height: 100px;
+            display: block;
+            margin: auto;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Favicon Generator</h1>
+    <div id="drop-area">SVG 파일을 드래그앤 드랍하세요</div>
+    <input type="file" id="upload" accept="image/svg+xml" style="display: none;">
+    <div id="preview"></div>
+    <input type="text" id="site-name" placeholder="웹사이트 이름 입력">
+    <button id="generate">Generate & Download</button>
+    <pre>
+		<code id="html-code" class="language-html">
+&lt!-- HTML 생성 대기 중 --&gt
+		</code>
+	</pre>
+    <button onclick="copyHTML()">Copy HTML</button>
+    
+    <script type="module">
+		import SVGO, * as SVGO_ALL from 'https://unpkg.com/svgo@2.8.0/dist/svgo.browser.js'
+
+		document.addEventListener("DOMContentLoaded", () => {
+            hljs.highlightAll();
+        });
+
+		window.SVGO = SVGO
+		window.SVGO_ALL = SVGO_ALL
+
+        const dropArea = document.getElementById("drop-area");
+        const fileInput = document.getElementById("upload");
+        const previewArea = document.getElementById("preview");
+
+        dropArea.addEventListener("click", () => fileInput.click());
+        dropArea.addEventListener("dragover", event => {
+            event.preventDefault();
+            dropArea.style.border = "2px solid #000";
+        });
+        dropArea.addEventListener("dragleave", () => {
+            dropArea.style.border = "2px dashed #ccc";
+        });
+        dropArea.addEventListener("drop", event => {
+            event.preventDefault();
+            dropArea.style.border = "2px dashed #ccc";
+            fileInput.files = event.dataTransfer.files;
+            previewFile();
+        });
+
+        fileInput.addEventListener("change", previewFile);
+
+        function previewFile() {
+            if (!fileInput.files.length) return;
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = function () {
+                previewArea.innerHTML = `<img src="${reader.result}" alt="Preview">`;
+            };
+        }
+
+        document.getElementById('generate').addEventListener('click', async () => {
+            if (!fileInput.files.length) {
+                alert("SVG 파일을 업로드하세요.");
+                return;
+            }
+            
+            const siteName = document.getElementById("site-name").value || "My Website";
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.readAsText(file);
+            reader.onload = async function () {
+                let svgData = reader.result;
+                
+                // SVG 최적화
+                try {
+                    const optimizedSvg = SVGO.optimize(svgData, { multipass: true });
+                    svgData = optimizedSvg.data;
+                } catch (error) {
+                    console.error("SVG 최적화 실패:", error);
+                }
+                
+                const zip = new JSZip();
+                zip.file("favicon.svg", svgData);
+                
+                const sizes = [512, 192, 180];
+                for (let size of sizes) {
+                    const pngData = await convertSVGToPNG(svgData, size);
+                    zip.file(`favicon-${size}.png`, pngData);
+                }
+
+                const icoData = await convertSVGToICO(svgData);
+                zip.file("favicon.ico", icoData);
+                
+                const manifest = {
+                    "name": siteName,
+                    "icons": [
+                        { "src": "favicon-192.png", "type": "image/png", "sizes": "192x192" },
+                        { "src": "favicon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "maskable" },
+                        { "src": "favicon-512.png", "type": "image/png", "sizes": "512x512" }
+                    ]
+                };
+                zip.file("manifest.webmanifest", JSON.stringify(manifest, null, 2));
+                
+				
+                const htmlCode = `
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/favicon-180.png">
+<link rel="manifest" href="/manifest.webmanifest">
+                `;
+                document.getElementById("html-code").textContent = htmlCode;
+				hljs.highlightAll();
+
+                
+                zip.generateAsync({ type: "blob" }).then(content => {
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(content);
+                    link.download = "favicon_package.zip";
+                    link.click();
+                });
+            };
+        });
+
+        async function convertSVGToPNG(svgData, size) {
+            return new Promise(resolve => {
+                const canvas = document.createElement("canvas");
+                const ctx = canvas.getContext("2d");
+                canvas.width = size;
+                canvas.height = size;
+                const img = new Image();
+                img.onload = function () {
+                    ctx.drawImage(img, 0, 0, size, size);
+                    canvas.toBlob(blob => resolve(blob), "image/png");
+                };
+                img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgData)}`;
+            });
+        }
+		
+		async function convertSVGToICO(svgData) {
+            return new Promise(async (resolve) => {
+                const sizes = [32, 16]; // 포함할 아이콘 크기
+                const images = [];
+
+                for (const size of sizes) {
+                    const canvas = document.createElement("canvas");
+                    const ctx = canvas.getContext("2d");
+                    canvas.width = size;
+                    canvas.height = size;
+
+                    const img = new Image();
+                    img.onload = async function () {
+                        ctx.clearRect(0, 0, size, size);
+                        ctx.drawImage(img, 0, 0, size, size);
+
+                        // PNG 데이터로 변환
+                        canvas.toBlob(async (blob) => {
+                            const arrayBuffer = await blob.arrayBuffer();
+                            images.push(new Uint8Array(arrayBuffer));
+
+                            // 모든 이미지가 준비되면 ICO로 변환
+                            if (images.length === sizes.length) {
+                                const icoData = createICO(images);
+                                resolve(new Blob([icoData], { type: "image/x-icon" }));
+                            }
+                        }, "image/png");
+                    };
+                    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgData)}`;
+                }
+            });
+        }
+
+        function createICO(images) {
+            const header = new Uint8Array([
+                0, 0, 1, 0, images.length, 0 // ICO 파일 헤더
+            ]);
+
+            let offset = 6 + images.length * 16; // 파일 오프셋 계산
+            const directories = [];
+            const imageData = [];
+
+            for (const img of images) {
+                const size = img.byteLength;
+                directories.push(new Uint8Array([
+                    32, 32, 0, 0, 1, 0, 32, 0, 
+                    size & 0xff, (size >> 8) & 0xff, (size >> 16) & 0xff, (size >> 24) & 0xff,
+                    offset & 0xff, (offset >> 8) & 0xff, (offset >> 16) & 0xff, (offset >> 24) & 0xff
+                ]));
+                offset += size;
+                imageData.push(img);
+            }
+
+            // 최종 ICO 바이너리 생성
+            return new Blob([header, ...directories, ...imageData], { type: "image/x-icon" });
+        }
+
+        
+    </script>
+	<script>
+	function copyHTML() {
+		const codeElement = document.getElementById("html-code");
+		navigator.clipboard.writeText(codeElement.innerText).then(() => {
+			alert("HTML 코드가 복사되었습니다!");
+		});
+	}
+	</script>
+
+</body>
+</html>
